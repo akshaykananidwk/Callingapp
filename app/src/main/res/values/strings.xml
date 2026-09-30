@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">CallBridge</string>
+    <string name="accessibility_label">CallBridge call audio helper</string>
+    <string name="accessibility_description">Optional. Keeps CallBridge running and helps some phones allow microphone capture during calls. CallBridge does not read screen content.</string>
+</resources>
