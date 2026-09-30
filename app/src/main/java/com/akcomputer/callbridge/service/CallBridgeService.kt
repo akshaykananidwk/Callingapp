@@ -151,6 +151,8 @@ class CallBridgeService : Service() {
 
     fun hasActiveCall() = session != null
 
+    fun log(message: String) = control.log(message)
+
     fun onOutgoingNumber(number: String?) {
         if (!number.isNullOrBlank()) {
             outgoingNumber = number

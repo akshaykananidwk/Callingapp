@@ -117,6 +117,8 @@ fun SettingsScreen() {
 
         DemoSettings()
 
+        GatewayCheckCard()
+
         SectionTitle("Keep running in background")
         Text(
             "Samsung (One UI): Settings → Apps → CallBridge → Battery → Unrestricted, and " +
