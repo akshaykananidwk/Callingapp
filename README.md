@@ -6,6 +6,8 @@ live transcript on the phone. Built from the CallBridge PRD v1.0.
 **Server + dashboard setup (Gujarati step-by-step): [deploy/DEPLOY-GU.md](deploy/DEPLOY-GU.md)** —
 one command: `sudo bash deploy/install.sh`.
 
+**No extra hardware — a rooted Qualcomm phone (e.g. OnePlus 9) as the line gateway via gsm2sip: [deploy/MOBILE-GATEWAY-GU.md](deploy/MOBILE-GATEWAY-GU.md).** The app's Settings → *Run line gateway check* tells (without root) whether a phone can inject audio into calls.
+
 **Website calling through a landline (Grandstream HT813 FXO: [deploy/LANDLINE-GU.md](deploy/LANDLINE-GU.md)) or a GoIP GSM gateway ([deploy/GOIP-GU.md](deploy/GOIP-GU.md)), via Asterisk + WebRTC** —
 `sudo bash deploy/pbx-install.sh`. The website becomes the phone: incoming calls ring in the browser, dial any
 number, auto-answer with a demo clip injected straight into the line, two-sided recording and live transcript.
@@ -19,7 +21,7 @@ number, auto-answer with a demo clip injected straight into the line, two-sided 
 
 ## Install the app
 
-1. Download `release/CallBridge-v1.0.1.apk` (or from the dashboard → Settings) (or the `CallBridge-apk` artifact from the GitHub Actions run).
+1. Download `release/CallBridge-v1.3.0.apk` (or from the dashboard → Settings) (or the `CallBridge-apk` artifact from the GitHub Actions run).
 2. On the phone: Settings → allow *Install unknown apps* for your browser/files app → open the APK.
 3. First launch: **Grant all permissions** → **Disable battery optimization** → enter VPS URL + API token → **Start CallBridge**.
 4. Samsung (One UI): Apps → CallBridge → Battery → *Unrestricted*; Permissions → Microphone → *Allow*.
