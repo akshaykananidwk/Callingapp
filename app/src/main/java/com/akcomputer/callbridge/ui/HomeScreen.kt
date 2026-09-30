@@ -1,5 +1,7 @@
 package com.akcomputer.callbridge.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -50,6 +52,8 @@ fun HomeScreen(onOpenRecord: (CallRecord) -> Unit, onOpenLive: () -> Unit) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refresh++ }
     val permsOk = remember(refresh) { hasCorePermissions(ctx) }
     val batteryOk = remember(refresh) { isIgnoringBatteryOptimizations(ctx) }
+    val missing = remember(refresh) { ALL_RUNTIME_PERMISSIONS.filterNot { granted(ctx, it) } }
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refresh++ }
 
     Column(
         Modifier
@@ -105,15 +109,17 @@ fun HomeScreen(onOpenRecord: (CallRecord) -> Unit, onOpenLive: () -> Unit) {
             }
         }
 
-        if (!permsOk || !batteryOk) {
+        if (missing.isNotEmpty() || !batteryOk) {
             Card(
                 Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Setup needed", style = MaterialTheme.typography.titleMedium)
-                    if (!permsOk) {
-                        Text("Phone and microphone permissions are required.")
+                    if (missing.isNotEmpty()) {
+                        Text("Missing permissions:")
+                        missing.forEach { Text("• ${PERMISSION_LABELS[it] ?: it}", style = MaterialTheme.typography.bodySmall) }
+                        Button(onClick = { permLauncher.launch(missing.toTypedArray()) }) { Text("Grant permissions") }
                         OutlinedButton(onClick = { openAppSettings(ctx) }) { Text("Open app permissions") }
                     }
                     if (!batteryOk) {

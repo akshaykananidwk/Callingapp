@@ -24,10 +24,11 @@ import org.json.JSONObject
 class StreamSocket(
     private val scope: CoroutineScope,
     private val onTranscript: (text: String, ts: Long) -> Unit,
+    private val onAudio: (ByteArray) -> Unit = {},
 ) {
     companion object {
         private const val TAG = "StreamSocket"
-        private const val MAX_PENDING = 9_000 // 30 minutes of 200 ms chunks (~57 MB worst case)
+        private const val MAX_PENDING = 15_000 // 10 minutes of 40 ms chunks (~19 MB worst case)
     }
 
     private val lock = Any()
@@ -149,7 +150,8 @@ class StreamSocket(
             }
         }
 
-        override fun onMessage(webSocket: WebSocket, bytes: ByteString) = Unit
+        // Website user's voice → phone loudspeaker.
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) = onAudio(bytes.toByteArray())
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
             serverClosed = true

@@ -12,5 +12,6 @@ module.exports = {
   openaiModel: env.OPENAI_MODEL || 'whisper-1',
   defaultLanguage: env.DEFAULT_LANGUAGE || 'auto',
   chunkSeconds: Math.min(Math.max(parseFloat(env.CHUNK_SECONDS || '5'), 2), 20),
+  recordingsDir: env.RECORDINGS_DIR || '/var/lib/callbridge/recordings',
   secureCookies: (env.PUBLIC_URL || '').startsWith('https://'),
 };

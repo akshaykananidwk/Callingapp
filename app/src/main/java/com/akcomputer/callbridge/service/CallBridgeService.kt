@@ -73,12 +73,14 @@ class CallBridgeService : Service() {
     private var outgoingNumber: String? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var autoAnswerJob: Job? = null
+    private lateinit var control: ControlSocket
     private var demoJob: Job? = null
     private var inForeground = false
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             session?.onNetworkAvailable()
+            control.onNetworkAvailable()
             scope.launch { heartbeatOnce() }
         }
     }
@@ -89,6 +91,9 @@ class CallBridgeService : Service() {
         super.onCreate()
         instance = this
         LiveState.serviceRunning.value = true
+        val version = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "" } catch (e: Exception) { "" }
+        control = ControlSocket(this, scope, version)
+        control.start()
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
         startHeartbeat()
         observeForNotification()
@@ -117,6 +122,7 @@ class CallBridgeService : Service() {
         session = null
         if (s != null) CoroutineScope(Dispatchers.Default).launch { s.stop() }
         releaseWakeLock()
+        control.stop()
         DemoMode.stopPlayback(this)
         scope.cancel()
         super.onDestroy()
@@ -143,6 +149,8 @@ class CallBridgeService : Service() {
 
     // ---- Call state machine: RINGING → OFFHOOK → IDLE -------------------------------------
 
+    fun hasActiveCall() = session != null
+
     fun onOutgoingNumber(number: String?) {
         if (!number.isNullOrBlank()) {
             outgoingNumber = number
@@ -157,14 +165,22 @@ class CallBridgeService : Service() {
                 if (session == null) {
                     ringing = true
                     if (!number.isNullOrBlank()) ringNumber = number
-                    if (Prefs.demoEnabled && Prefs.demoAutoAnswer && autoAnswerJob == null) {
+                    control.sendState("ringing", ringNumber, "incoming")
+                    if (Prefs.autoAnswer && autoAnswerJob == null) {
                         autoAnswerJob = scope.launch(Dispatchers.Main) {
                             delay(Prefs.demoAnswerDelaySec * 1000L)
                             // The number usually arrives in a second broadcast, so decide at answer time.
-                            if (ringing && session == null && DemoMode.appliesTo(ringNumber, incoming = true)) {
-                                DemoMode.answer(this@CallBridgeService)
+                            if (ringing && session == null) {
+                                if (DemoMode.numberAllowed(ringNumber)) {
+                                    control.log("Auto-answering ${ringNumber ?: "unknown number"}")
+                                    CallControl.answer(this@CallBridgeService, control::log)
+                                } else {
+                                    control.log("Not auto-answering ${ringNumber ?: "unknown number"} (not in the number list)")
+                                }
                             }
                         }
+                    } else if (!Prefs.autoAnswer && number.isNullOrBlank()) {
+                        control.log("Auto-answer is OFF in the app")
                     }
                 }
             }
@@ -172,6 +188,7 @@ class CallBridgeService : Service() {
                 val current = session
                 if (current != null) {
                     current.updateNumber(number)
+                    if (!number.isNullOrBlank()) control.sendState("offhook", current.number, current.direction)
                     return
                 }
                 val direction = if (ringing) "incoming" else "outgoing"
@@ -180,6 +197,7 @@ class CallBridgeService : Service() {
                 val s = CallSession(applicationContext, scope, num, direction)
                 session = s
                 s.start()
+                control.sendState("offhook", num, direction)
                 onCallStarted()
                 autoAnswerJob?.cancel()
                 autoAnswerJob = null
@@ -196,6 +214,7 @@ class CallBridgeService : Service() {
                 ringing = false
                 ringNumber = null
                 outgoingNumber = null
+                control.sendState("idle", null, null)
                 autoAnswerJob?.cancel()
                 autoAnswerJob = null
                 demoJob?.cancel()

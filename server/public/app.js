@@ -75,27 +75,244 @@
     showLogin();
   });
 
-  // ---------- live websocket ----------
+  // ---------- live websocket + global phone state ----------
   let ws = null;
   let wsRetry = null;
   const listeners = new Set();
+  const S = {
+    phones: new Map(), // token_id -> device
+    active: new Map(), // call id -> { call, segs }
+    listenCall: null,
+    talking: false,
+    level: 0,
+    logs: [],
+  };
+  const pendingCmds = new Map();
+  let reqSeq = 0;
+
   function connectLive() {
     if (ws && ws.readyState <= 1) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/live`);
-    ws.onopen = () => { $('#ws-dot').className = 'dot on'; };
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = async () => {
+      $('#ws-dot').className = 'dot on';
+      // Re-subscribe to audio after a reconnect.
+      if (S.listenCall) wsSend({ type: 'listen', call_id: S.listenCall });
+      if (S.talking && S.listenCall) wsSend({ type: 'talk', call_id: S.listenCall, on: true });
+      try {
+        const st = await api('/api/device/status');
+        S.active.clear();
+        for (const c of st.active_calls) {
+          const t = await api(`/api/calls/${c.id}/transcript`).catch(() => ({ segments: [] }));
+          S.active.set(c.id, { call: c, segs: t.segments });
+        }
+        emit({ type: 'refresh' });
+      } catch {}
+    };
     ws.onclose = () => {
       $('#ws-dot').className = 'dot off';
       if (!$('#app').classList.contains('hidden')) wsRetry = setTimeout(connectLive, 3000);
     };
     ws.onmessage = (m) => {
+      if (m.data instanceof ArrayBuffer) { audio.play(m.data); return; }
       let ev; try { ev = JSON.parse(m.data); } catch { return; }
-      listeners.forEach((fn) => fn(ev));
+      handleGlobal(ev);
+      emit(ev);
     };
   }
   function disconnectLive() {
     clearTimeout(wsRetry);
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
+    audio.stopMic();
+  }
+  const emit = (ev) => listeners.forEach((fn) => fn(ev));
+  const wsSend = (msg) => { if (ws && ws.readyState === 1) ws.send(typeof msg === 'string' || msg instanceof ArrayBuffer ? msg : JSON.stringify(msg)); };
+
+  /** Send a phone command and wait for the result. */
+  function command(type, extra = {}) {
+    return new Promise((resolve) => {
+      const req = ++reqSeq;
+      pendingCmds.set(req, resolve);
+      setTimeout(() => { if (pendingCmds.delete(req)) resolve({ ok: false, error: 'No response from server' }); }, 20000);
+      wsSend({ type, req, ...extra });
+    });
+  }
+
+  function handleGlobal(ev) {
+    switch (ev.type) {
+      case 'cmd_result': {
+        const r = pendingCmds.get(ev.req);
+        if (r) { pendingCmds.delete(ev.req); r(ev); }
+        break;
+      }
+      case 'phones': {
+        S.phones = new Map(ev.devices.map((d) => [d.token_id, d]));
+        const ringing = ev.devices.find((d) => d.state?.state === 'ringing');
+        if (ringing) showIncoming(ringing.state.number, ringing);
+        break;
+      }
+      case 'phone':
+        if (ev.device.online) S.phones.set(ev.device.token_id, ev.device);
+        else S.phones.delete(ev.device.token_id);
+        if (ev.device.state?.state !== 'ringing') hideIncoming();
+        break;
+      case 'incoming':
+        showIncoming(ev.number, ev.device);
+        break;
+      case 'call_started':
+        S.active.set(ev.call.id, { call: ev.call, segs: [] });
+        hideIncoming();
+        if (audio.unlocked) setListen(ev.call.id);
+        break;
+      case 'transcript': {
+        const a = S.active.get(ev.call_id);
+        if (a) a.segs.push({ text: ev.text, offset_ms: ev.ts });
+        break;
+      }
+      case 'call_ended':
+        S.active.delete(ev.call.id);
+        if (S.listenCall === ev.call.id) { setListen(null); setTalk(false); }
+        break;
+      case 'phone_log':
+        S.logs.unshift({ at: new Date(), name: ev.name, message: ev.message });
+        S.logs.length = Math.min(S.logs.length, 20);
+        break;
+    }
+  }
+
+  function setListen(callId) {
+    S.listenCall = callId;
+    wsSend({ type: 'listen', call_id: callId });
+  }
+  async function setTalk(on) {
+    if (on) {
+      if (!S.listenCall) return toast('No active call');
+      try { await audio.startMic((buf) => wsSend(buf)); }
+      catch (e) { return toast('Microphone blocked: ' + e.message); }
+      S.talking = true;
+      wsSend({ type: 'talk', call_id: S.listenCall, on: true });
+    } else {
+      S.talking = false;
+      audio.stopMic();
+      wsSend({ type: 'talk', call_id: null, on: false });
+    }
+    emit({ type: 'refresh' });
+  }
+
+  // ---------- audio engine (browser speaker + microphone) ----------
+  const audio = {
+    ctx: null, gain: null, nextTime: 0, unlocked: false,
+    mic: null, micNode: null, micLoudAt: 0,
+    async unlock() {
+      if (!this.ctx) {
+        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        this.gain = this.ctx.createGain();
+        this.gain.connect(this.ctx.destination);
+      }
+      if (this.ctx.state === 'suspended') await this.ctx.resume();
+      this.unlocked = true;
+    },
+    play(buf) {
+      if (!this.ctx || !S.listenCall) return;
+      const i16 = new Int16Array(buf);
+      const f = new Float32Array(i16.length);
+      let sum = 0;
+      for (let i = 0; i < i16.length; i++) { f[i] = i16[i] / 32768; sum += f[i] * f[i]; }
+      S.level = Math.min(1, Math.sqrt(sum / (f.length || 1)) * 4);
+      const ab = this.ctx.createBuffer(1, f.length, 16000);
+      ab.copyToChannel(f, 0);
+      const src = this.ctx.createBufferSource();
+      src.buffer = ab;
+      src.connect(this.gain);
+      const now = this.ctx.currentTime;
+      if (this.nextTime < now + 0.03 || this.nextTime > now + 0.8) this.nextTime = now + 0.12; // jitter buffer
+      src.start(this.nextTime);
+      this.nextTime += ab.duration;
+      // Half-duplex echo gate: while you speak, your own voice returning from the phone is quieted.
+      const speaking = S.talking && performance.now() - this.micLoudAt < 500;
+      this.gain.gain.setTargetAtTime(speaking ? 0.12 : 1, now, 0.05);
+    },
+    async startMic(send) {
+      await this.unlock();
+      if (this.mic) return;
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('needs HTTPS');
+      this.mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      await this.ctx.audioWorklet.addModule('/mic-worklet.js');
+      const srcNode = this.ctx.createMediaStreamSource(this.mic);
+      this.micNode = new AudioWorkletNode(this.ctx, 'mic-processor');
+      this.micNode.port.onmessage = (e) => {
+        const i16 = new Int16Array(e.data);
+        let sum = 0;
+        for (let i = 0; i < i16.length; i++) sum += (i16[i] / 32768) ** 2;
+        if (Math.sqrt(sum / i16.length) > 0.02) this.micLoudAt = performance.now();
+        send(e.data);
+      };
+      const mute = this.ctx.createGain();
+      mute.gain.value = 0;
+      srcNode.connect(this.micNode).connect(mute).connect(this.ctx.destination);
+    },
+    stopMic() {
+      if (this.mic) this.mic.getTracks().forEach((t) => t.stop());
+      if (this.micNode) this.micNode.disconnect();
+      this.mic = null;
+      this.micNode = null;
+    },
+    ring: null,
+    startRing() {
+      if (!this.ctx || this.ring) return;
+      const beep = () => {
+        const t = this.ctx.currentTime;
+        [0, 0.35].forEach((d) => {
+          const o = this.ctx.createOscillator();
+          const g = this.ctx.createGain();
+          o.frequency.value = 880;
+          g.gain.setValueAtTime(0.0001, t + d);
+          g.gain.exponentialRampToValueAtTime(0.25, t + d + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.3);
+          o.connect(g).connect(this.ctx.destination);
+          o.start(t + d); o.stop(t + d + 0.32);
+        });
+      };
+      beep();
+      this.ring = setInterval(beep, 2000);
+    },
+    stopRing() { clearInterval(this.ring); this.ring = null; },
+  };
+
+  // ---------- incoming call popup (any page) ----------
+  let titleBlink = null;
+  function showIncoming(number, device) {
+    const el = $('#incoming');
+    $('#incoming-number').textContent = number || 'Unknown number';
+    $('#incoming-device').textContent = device?.name || '';
+    el.classList.remove('hidden');
+    audio.startRing();
+    const base = 'CallBridge';
+    clearInterval(titleBlink);
+    titleBlink = setInterval(() => { document.title = document.title === base ? `📞 ${number || 'Incoming call'}` : base; }, 900);
+    if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
+      const n = new Notification('Incoming call', { body: number || 'Unknown number', icon: '/favicon.svg', requireInteraction: true });
+      n.onclick = () => { window.focus(); n.close(); };
+    }
+    $('#incoming-answer').onclick = async () => {
+      await audio.unlock();
+      hideIncoming();
+      location.hash = '#/live';
+      const r = await command('answer', { token_id: device?.token_id });
+      if (!r.ok) toast(r.error || 'Could not answer');
+    };
+    $('#incoming-reject').onclick = async () => {
+      hideIncoming();
+      const r = await command('hangup', { token_id: device?.token_id });
+      if (!r.ok) toast(r.error || 'Could not reject');
+    };
+  }
+  function hideIncoming() {
+    $('#incoming').classList.add('hidden');
+    audio.stopRing();
+    clearInterval(titleBlink);
+    document.title = 'CallBridge';
   }
 
   // ---------- router ----------
@@ -109,88 +326,151 @@
     (pages[name] || pageLive)();
   }
   window.addEventListener('hashchange', route);
-  function on(fn) { listeners.add(fn); cleanup = () => listeners.delete(fn); }
+  function on(fn) { listeners.add(fn); const prev = cleanup; cleanup = () => { listeners.delete(fn); prev && prev(); }; }
 
-  // ---------- Live ----------
+  // ---------- Phone (live) ----------
+  const stateLabel = (d) => {
+    const st = d?.state?.state;
+    if (st === 'ringing') return '<span class="badge live pulse">Ringing</span>';
+    if (st === 'offhook') return '<span class="badge live">On call</span>';
+    return '<span class="badge ok">Ready</span>';
+  };
+
   async function pageLive() {
-    view.innerHTML = '<p class="muted">Loading…</p>';
-    let overview, status;
-    try {
-      [overview, status] = await Promise.all([api('/admin/api/overview'), api('/api/device/status')]);
-    } catch (e) { view.innerHTML = `<p class="error">${esc(e.message)}</p>`; return; }
-    const s = overview.stats;
     view.innerHTML = `
-      <h1>Live</h1>
-      <div class="grid cols-4">
-        <div class="card stat"><div class="label">Calls today</div><div class="value">${s.calls_today}</div></div>
-        <div class="card stat"><div class="label">Total calls</div><div class="value">${s.total_calls}</div></div>
-        <div class="card stat"><div class="label">Talk time</div><div class="value">${s.total_seconds < 60 ? s.total_seconds + ' s' : Math.round(s.total_seconds / 60) + ' min'}</div></div>
-        <div class="card stat"><div class="label">Speech-to-text</div>
-          <div class="value row" style="font-size:16px"><span class="dot ${overview.stt.ok ? 'on' : 'off'}"></span>${esc(overview.stt.provider)}</div>
-          <div class="muted" style="font-size:12px">${esc(overview.stt.detail)}</div></div>
+      <div class="grid phone-grid">
+        <div class="card">
+          <div class="row"><h2 style="margin:0">Phone</h2><span class="spacer"></span>
+            <button class="btn small" id="enable-audio">🔔 Enable sound & alerts</button></div>
+          <div id="phones" style="margin:12px 0"></div>
+          <form id="dial-form" class="stack" autocomplete="off">
+            <input id="dial-number" class="dial-input" inputmode="tel" placeholder="Enter number" aria-label="Number to call">
+            <div class="keypad">${['1','2','3','4','5','6','7','8','9','*','0','+'].map((k) => `<button type="button" class="key" data-key="${k}">${k}</button>`).join('')}</div>
+            <div class="row">
+              <button type="button" class="btn ghost" id="dial-back">⌫</button>
+              <button type="submit" class="btn call-btn" id="dial-call">📞 Call</button>
+            </div>
+          </form>
+        </div>
+        <div class="card" id="call-panel"></div>
       </div>
-      <div class="grid cols-2" style="margin-top:16px">
-        <div class="card"><h2>Phones</h2><div id="devices"></div></div>
-        <div class="card"><h2>Active calls</h2><div id="active" class="stack"></div></div>
-      </div>
-      <div class="card" style="margin-top:16px"><h2>Recent calls</h2><div id="recent"></div></div>`;
+      <div class="grid cols-4" style="margin-top:16px" id="stats"></div>
+      <div class="card" style="margin-top:16px"><h2>Recent calls</h2><div id="recent"><p class="muted">Loading…</p></div></div>`;
 
-    const devices = new Map(status.devices.map((d) => [d.token_id, d]));
-    const renderDevices = () => {
-      const el = $('#devices');
+    const numberEl = $('#dial-number');
+    view.querySelectorAll('.key').forEach((k) => k.addEventListener('click', () => { numberEl.value += k.dataset.key; numberEl.focus(); }));
+    $('#dial-back').onclick = () => { numberEl.value = numberEl.value.slice(0, -1); };
+    $('#dial-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const number = numberEl.value.trim();
+      if (!number) return;
+      await audio.unlock();
+      $('#dial-call').disabled = true;
+      const r = await command('dial', { number, token_id: selectedPhone() });
+      $('#dial-call').disabled = false;
+      toast(r.ok ? `Calling ${number}…` : (r.error || 'Call failed'));
+    });
+    $('#enable-audio').onclick = async () => {
+      await audio.unlock();
+      if ('Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
+      if (!S.listenCall && S.active.size) setListen([...S.active.keys()][0]);
+      toast('Sound and alerts enabled');
+      render();
+    };
+
+    let selected = null;
+    const selectedPhone = () => selected || [...S.phones.keys()][0] || null;
+
+    function renderPhones() {
+      const el = $('#phones');
       if (!el) return;
-      if (!devices.size) {
-        el.innerHTML = `<p class="muted">No phone has connected yet. <a href="#/tokens">Generate a token</a> and enter it in the app.</p>`;
+      if (!S.phones.size) {
+        el.innerHTML = `<p class="muted"><span class="dot off"></span> No phone connected. Open the CallBridge app (v1.2+) with the service ON. <a href="#/tokens">Tokens</a></p>`;
         return;
       }
-      el.innerHTML = [...devices.values()].map((d) => {
-        const online = d.online || (Date.now() - new Date(d.last_seen_at)) < 150000;
-        return `<div class="row" style="padding:8px 0;border-bottom:1px solid var(--border)">
-          <span class="dot ${online ? 'on' : 'off'}"></span><strong>${esc(d.name)}</strong>
+      const cur = selectedPhone();
+      el.innerHTML = [...S.phones.values()].map((d) => `
+        <label class="phone-row">
+          <input type="radio" name="phone" value="${d.token_id}" ${d.token_id === cur ? 'checked' : ''} ${S.phones.size === 1 ? 'hidden' : ''}>
+          <span class="dot on"></span><strong>${esc(d.name)}</strong> ${stateLabel(d)}
           <span class="spacer"></span>
-          <span class="muted">${d.battery != null ? `🔋 ${d.battery}%` : ''} ${esc(d.network || '')} · ${esc(d.service_status || '')} · ${fmtAgo(d.last_seen_at)}</span>
-        </div>`;
-      }).join('');
-    };
-    renderDevices();
+          <span class="muted small">${d.info?.battery != null ? `🔋 ${d.info.battery}%` : ''} ${esc(d.info?.network || '')} ${d.info?.app_version ? 'v' + esc(d.info.app_version) : ''}</span>
+        </label>
+        ${d.info?.permissions && d.info.permissions.length ? `<p class="error small">Missing on phone: ${d.info.permissions.map(esc).join(', ')}</p>` : ''}`).join('');
+      el.querySelectorAll('input[name=phone]').forEach((r) => r.onchange = () => { selected = r.value; render(); });
+    }
 
-    const active = new Map();
-    const renderActive = () => {
-      const el = $('#active');
+    function renderCall() {
+      const el = $('#call-panel');
       if (!el) return;
-      if (!active.size) { el.innerHTML = '<p class="muted">No call in progress.</p>'; return; }
-      el.innerHTML = [...active.values()].map(({ call, segs }) => `
-        <div class="card live-call">
-          <div class="row"><strong>${esc(call.phone_number || 'Unknown number')}</strong>${dirBadge(call.direction)}
-            <span class="badge live pulse">● Live</span><span class="spacer"></span>
-            <a class="btn small" href="#/calls/${call.id}">Open</a></div>
-          <div class="transcript live-transcript" data-call="${call.id}">
-            ${segs.length ? segs.map(segHtml).join('') : '<p class="muted">Listening…</p>'}
-          </div>
-        </div>`).join('');
-      el.querySelectorAll('.live-transcript').forEach((t) => { t.scrollTop = t.scrollHeight; });
-    };
-    await Promise.all(status.active_calls.map(async (c) => {
-      const t = await api(`/api/calls/${c.id}/transcript`).catch(() => ({ segments: [] }));
-      active.set(c.id, { call: c, segs: t.segments });
-    }));
-    renderActive();
+      const dev = S.phones.get(selectedPhone());
+      const st = dev?.state?.state || 'idle';
+      const act = [...S.active.values()].sort((a, b) => new Date(b.call.started_at) - new Date(a.call.started_at))[0];
+      if (st === 'idle' && !act) {
+        el.innerHTML = `<h2>Current call</h2><div class="empty">No call in progress.<br><span class="small">Incoming calls pop up here automatically.</span></div>
+          ${S.logs.length ? `<h2 style="margin-top:12px">Phone log</h2><div class="small muted">${S.logs.slice(0, 6).map((l) => `<div>${l.at.toLocaleTimeString()} · ${esc(l.message)}</div>`).join('')}</div>` : ''}`;
+        return;
+      }
+      const number = act?.call.phone_number || dev?.state?.number || 'Unknown number';
+      const direction = act?.call.direction || dev?.state?.direction;
+      const started = act ? new Date(act.call.started_at) : null;
+      const listening = act && S.listenCall === act.call.id;
+      el.innerHTML = `
+        <div class="row"><h2 style="margin:0">${esc(number)}</h2>${direction ? dirBadge(direction) : ''}${stateLabel(dev)}
+          <span class="spacer"></span><span class="timer" id="call-timer">${started ? fmtDur(Math.floor((Date.now() - started) / 1000)) : ''}</span></div>
+        <div class="call-actions">
+          ${st === 'ringing' ? '<button class="btn call-btn" id="c-answer">📞 Answer</button>' : ''}
+          <button class="btn hang-btn" id="c-hangup">${st === 'ringing' ? 'Reject' : 'Hang up'}</button>
+          ${act ? `<button class="btn ${listening ? 'primary' : ''}" id="c-listen">${listening ? '🔊 Listening' : '🔈 Listen'}</button>
+                   <button class="btn ${S.talking ? 'primary' : ''}" id="c-talk">${S.talking ? '🎙 Mic ON' : '🎙 Talk'}</button>` : ''}
+          <button class="btn" id="c-speaker">Speaker</button>
+        </div>
+        ${act ? `<div class="meter"><div id="level" style="width:0%"></div></div>` : ''}
+        <div class="transcript live-transcript" id="live-segs">
+          ${act ? (act.segs.length ? act.segs.map((x) => segHtml(x)).join('') : '<p class="muted">Listening for speech…</p>') : ''}
+        </div>`;
+      const t = $('#live-segs'); if (t) t.scrollTop = t.scrollHeight;
+      const tok = selectedPhone();
+      const run = async (type, extra = {}) => { const r = await command(type, { token_id: tok, ...extra }); if (!r.ok) toast(r.error || `${type} failed`); };
+      $('#c-answer') && ($('#c-answer').onclick = async () => { await audio.unlock(); run('answer'); });
+      $('#c-hangup').onclick = () => run('hangup');
+      let speakerOn = true;
+      $('#c-speaker').onclick = () => { run('speaker', { on: speakerOn }); speakerOn = !speakerOn; };
+      if ($('#c-listen')) $('#c-listen').onclick = async () => { await audio.unlock(); setListen(listening ? null : act.call.id); if (listening) setTalk(false); renderCall(); };
+      if ($('#c-talk')) $('#c-talk').onclick = async () => { if (!S.listenCall) setListen(act.call.id); await setTalk(!S.talking); };
+    }
 
-    const recent = await api('/api/calls?limit=8').catch(() => ({ calls: [] }));
-    $('#recent').innerHTML = callsTable(recent.calls);
+    async function renderStats() {
+      try {
+        const o = await api('/admin/api/overview');
+        const s = o.stats;
+        const el = $('#stats'); if (!el) return;
+        el.innerHTML = `
+          <div class="card stat"><div class="label">Calls today</div><div class="value">${s.calls_today}</div></div>
+          <div class="card stat"><div class="label">Total calls</div><div class="value">${s.total_calls}</div></div>
+          <div class="card stat"><div class="label">Talk time</div><div class="value">${s.total_seconds < 60 ? s.total_seconds + ' s' : Math.round(s.total_seconds / 60) + ' min'}</div></div>
+          <div class="card stat"><div class="label">Speech-to-text</div>
+            <div class="value row" style="font-size:16px"><span class="dot ${o.stt.ok ? 'on' : 'off'}"></span>${esc(o.stt.provider)}</div></div>`;
+      } catch {}
+      const recent = await api('/api/calls?limit=8').catch(() => ({ calls: [] }));
+      const r = $('#recent'); if (r) r.innerHTML = callsTable(recent.calls);
+    }
 
+    function render() { renderPhones(); renderCall(); }
+    render();
+    renderStats();
+    const tick = setInterval(() => {
+      const act = [...S.active.values()][0];
+      const tEl = $('#call-timer');
+      if (tEl && act) tEl.textContent = fmtDur(Math.floor((Date.now() - new Date(act.call.started_at)) / 1000));
+      const lv = $('#level'); if (lv) { lv.style.width = `${Math.round(S.level * 100)}%`; S.level *= 0.85; }
+    }, 200);
     on((ev) => {
-      if (ev.type === 'device') { devices.set(ev.device.token_id, ev.device); renderDevices(); }
-      if (ev.type === 'call_started') { active.set(ev.call.id, { call: ev.call, segs: [] }); renderActive(); }
-      if (ev.type === 'transcript') {
-        const a = active.get(ev.call_id);
-        if (a) { a.segs.push({ text: ev.text, offset_ms: ev.ts }); renderActive(); }
-      }
-      if (ev.type === 'call_ended') {
-        active.delete(ev.call.id); renderActive();
-        api('/api/calls?limit=8').then((r) => { const el = $('#recent'); if (el) el.innerHTML = callsTable(r.calls); }).catch(() => {});
-      }
+      if (['phone', 'phones', 'call_started', 'transcript', 'refresh', 'phone_log', 'incoming'].includes(ev.type)) render();
+      if (ev.type === 'call_ended') { render(); renderStats(); }
     });
+    const prevCleanup = cleanup;
+    cleanup = () => { clearInterval(tick); prevCleanup && prevCleanup(); };
   }
 
   const segHtml = (s, q) => `<div class="seg"><time>${fmtOffset(s.offset_ms)}</time><p>${highlight(s.text, q)}</p></div>`;
@@ -318,6 +598,8 @@
           <button class="btn small danger" id="del">Delete</button>
         </div>
         <p class="muted" style="margin:8px 0 0">${fmtDate(call.started_at)} · Duration ${fmtDur(call.duration_sec)} · Language ${esc(call.language || 'auto')}</p>
+        ${call.recording_path ? `<div class="row" style="margin-top:12px"><audio controls preload="metadata" src="/api/calls/${call.id}/recording" style="flex:1;min-width:240px"></audio>
+          <a class="btn small" href="/api/calls/${call.id}/recording?download=1">Download recording</a></div>` : ''}
       </div>
       <div class="card" style="margin-top:16px"><div id="segs" class="transcript"></div></div>`;
     render();

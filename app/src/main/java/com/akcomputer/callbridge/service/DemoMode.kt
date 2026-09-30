@@ -1,17 +1,13 @@
 package com.akcomputer.callbridge.service
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Build
-import android.telecom.TelecomManager
 import android.util.Log
-import androidx.core.content.ContextCompat
 import com.akcomputer.callbridge.core.Prefs
 import java.io.File
 
@@ -34,6 +30,11 @@ object DemoMode {
     fun appliesTo(number: String?, incoming: Boolean): Boolean {
         if (!Prefs.demoEnabled) return false
         if (!incoming && !Prefs.demoOnOutgoing) return false
+        return !incoming || numberAllowed(number)
+    }
+
+    /** Number filter shared by auto-answer and the demo clip. Blank list = every number. */
+    fun numberAllowed(number: String?): Boolean {
         val list = Prefs.demoNumbers.split(',', ';', '\n').map { digits(it) }.filter { it.isNotEmpty() }
         if (list.isEmpty()) return true
         val n = digits(number ?: return false)
@@ -41,25 +42,6 @@ object DemoMode {
     }
 
     private fun digits(s: String) = s.filter { it.isDigit() }.takeLast(10)
-
-    @SuppressLint("MissingPermission")
-    @Suppress("DEPRECATION")
-    fun answer(context: Context): Boolean {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ANSWER_PHONE_CALLS)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            Log.w(TAG, "ANSWER_PHONE_CALLS not granted")
-            return false
-        }
-        return try {
-            context.getSystemService(TelecomManager::class.java).acceptRingingCall()
-            Log.i(TAG, "Call auto-answered")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "acceptRingingCall failed", e)
-            false
-        }
-    }
 
     @Synchronized
     fun startPlayback(context: Context) {

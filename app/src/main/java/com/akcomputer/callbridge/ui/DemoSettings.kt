@@ -48,7 +48,7 @@ private const val MAX_RECORD_SEC = 60
 fun DemoSettings() {
     val ctx = LocalContext.current
     var enabled by remember { mutableStateOf(Prefs.demoEnabled) }
-    var autoAnswer by remember { mutableStateOf(Prefs.demoAutoAnswer) }
+    var autoAnswer by remember { mutableStateOf(Prefs.autoAnswer) }
     var delaySec by remember { mutableIntStateOf(Prefs.demoAnswerDelaySec) }
     var numbers by remember { mutableStateOf(Prefs.demoNumbers) }
     var outgoing by remember { mutableStateOf(Prefs.demoOnOutgoing) }
@@ -104,7 +104,46 @@ fun DemoSettings() {
         }
     }
 
-    SectionTitle("Demo / test mode")
+    SectionTitle("Answering calls")
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // ---- Auto-answer ----
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Auto-answer incoming calls", Modifier.weight(1f))
+                Switch(checked = autoAnswer, onCheckedChange = { autoAnswer = it; Prefs.autoAnswer = it })
+            }
+            if (autoAnswer && !canAnswer) {
+                OutlinedButton(onClick = { permLauncher.launch(Manifest.permission.ANSWER_PHONE_CALLS) }) {
+                    Text("Allow CallBridge to answer calls")
+                }
+            }
+            if (autoAnswer) {
+                Text("Answer after", style = MaterialTheme.typography.bodySmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(0, 2, 5, 10).forEach { s ->
+                        FilterChip(
+                            selected = delaySec == s,
+                            onClick = { delaySec = s; Prefs.demoAnswerDelaySec = s },
+                            label = { Text("$s s") },
+                        )
+                    }
+                }
+            }
+            OutlinedTextField(
+                value = numbers,
+                onValueChange = { numbers = it; Prefs.demoNumbers = it },
+                label = { Text("Only these numbers (optional)") },
+                supportingText = { Text("Comma separated. Blank = every incoming call.") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                "Incoming calls also pop up on the website, where you can answer or reject them.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+
+    SectionTitle("Demo clip (testing)")
     Card(
         Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -112,9 +151,9 @@ fun DemoSettings() {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Demo mode", style = MaterialTheme.typography.titleMedium)
+                    Text("Play demo clip", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Auto-answer calls and play the demo clip on loudspeaker in a loop",
+                        "Loop the clip on the loudspeaker during answered calls",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -164,35 +203,6 @@ fun DemoSettings() {
             }
             message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
 
-            // ---- Options ----
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Auto-answer incoming calls", Modifier.weight(1f))
-                Switch(checked = autoAnswer, onCheckedChange = { autoAnswer = it; Prefs.demoAutoAnswer = it })
-            }
-            if (autoAnswer && !canAnswer) {
-                OutlinedButton(onClick = { permLauncher.launch(Manifest.permission.ANSWER_PHONE_CALLS) }) {
-                    Text("Allow CallBridge to answer calls")
-                }
-            }
-            if (autoAnswer) {
-                Text("Answer after", style = MaterialTheme.typography.bodySmall)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(0, 2, 5, 10).forEach { s ->
-                        FilterChip(
-                            selected = delaySec == s,
-                            onClick = { delaySec = s; Prefs.demoAnswerDelaySec = s },
-                            label = { Text("$s s") },
-                        )
-                    }
-                }
-            }
-            OutlinedTextField(
-                value = numbers,
-                onValueChange = { numbers = it; Prefs.demoNumbers = it },
-                label = { Text("Only these numbers (optional)") },
-                supportingText = { Text("Comma separated. Blank = every incoming call gets the demo.") },
-                modifier = Modifier.fillMaxWidth(),
-            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Also play on outgoing calls", Modifier.weight(1f))
                 Switch(checked = outgoing, onCheckedChange = { outgoing = it; Prefs.demoOnOutgoing = it })
@@ -203,9 +213,9 @@ fun DemoSettings() {
                     "quiet place, screen up. If the speaker does not switch on by itself, tap Speaker on the call screen.",
                 style = MaterialTheme.typography.bodySmall,
             )
-            if (enabled && numbers.isBlank() && autoAnswer) {
+            if (numbers.isBlank() && autoAnswer) {
                 Text(
-                    "⚠ Every incoming call will be answered automatically with the demo clip.",
+                    "⚠ Auto-answer is ON for every incoming call (number list is blank).",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )

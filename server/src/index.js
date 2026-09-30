@@ -7,7 +7,8 @@ const config = require('./config');
 const db = require('./db');
 const auth = require('./auth');
 const stream = require('./stream');
-const live = require('./live');
+const deviceHub = require('./deviceHub');
+const control = require('./control');
 
 const app = express();
 app.set('trust proxy', 'loopback');
@@ -53,13 +54,21 @@ server.on('upgrade', async (req, socket, head) => {
         ws.on('pong', () => { ws.isAlive = true; });
         stream.handleDevice(ws, req).catch((e) => { console.error(e); ws.close(1011, 'error'); });
       });
+    } else if (pathname === '/device') {
+      const token = await auth.findToken(auth.bearer(req) || searchParams.get('token'));
+      if (!token) return reject(401, 'Unauthorized');
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.isAlive = true;
+        ws.on('pong', () => { ws.isAlive = true; });
+        deviceHub.attach(ws, token);
+      });
     } else if (pathname === '/live') {
       const user = await auth.sessionUser(req);
       if (!user) return reject(401, 'Unauthorized');
       wss.handleUpgrade(req, socket, head, (ws) => {
         ws.isAlive = true;
         ws.on('pong', () => { ws.isAlive = true; });
-        live.add(ws);
+        control.handle(ws, user);
       });
     } else {
       reject(404, 'Not Found');

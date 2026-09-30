@@ -3,6 +3,8 @@
  * Binary frames: 16 kHz mono PCM16. Audio is cut into ~CHUNK_SECONDS pieces at a quiet point,
  * transcribed in order, saved as transcript_segments and pushed to the phone + dashboard.
  */
+const fs = require('fs');
+const path = require('path');
 const db = require('./db');
 const config = require('./config');
 const stt = require('./stt');
@@ -28,6 +30,41 @@ class CallStream {
     this.sockets = new Set();
     this.finished = false;
     this.idleTimer = null;
+    this.openRecording();
+  }
+
+  // ---- Automatic recording: <RECORDINGS_DIR>/<call_id>.wav ----
+  openRecording() {
+    try {
+      fs.mkdirSync(config.recordingsDir, { recursive: true });
+      this.recordingPath = path.join(config.recordingsDir, `${this.callId}.wav`);
+      const exists = fs.existsSync(this.recordingPath);
+      this.recording = fs.createWriteStream(this.recordingPath, { flags: 'a' });
+      if (!exists) this.recording.write(stt.toWav(Buffer.alloc(0))); // header, sizes fixed on finish
+      this.recording.on('error', (e) => { console.error('recording error', e.message); this.recording = null; });
+    } catch (e) {
+      console.error(`[stream ${this.callId}] cannot record:`, e.message);
+      this.recording = null;
+    }
+  }
+
+  async closeRecording() {
+    if (!this.recording) return null;
+    await new Promise((r) => this.recording.end(r));
+    this.recording = null;
+    const size = fs.statSync(this.recordingPath).size;
+    if (size <= 44) { fs.unlinkSync(this.recordingPath); return null; }
+    const fd = fs.openSync(this.recordingPath, 'r+');
+    const b = Buffer.alloc(4);
+    b.writeUInt32LE(size - 8, 0); fs.writeSync(fd, b, 0, 4, 4);
+    b.writeUInt32LE(size - 44, 0); fs.writeSync(fd, b, 0, 4, 40);
+    fs.closeSync(fd);
+    return this.recordingPath;
+  }
+
+  /** Browser microphone audio → phone (played on its loudspeaker). */
+  sendToPhone(buf) {
+    for (const ws of this.sockets) if (ws.readyState === 1) ws.send(buf, { binary: true });
   }
 
   attach(ws) {
@@ -43,6 +80,8 @@ class CallStream {
 
   push(data) {
     if (this.finished) return;
+    if (this.recording) this.recording.write(data);
+    live.sendAudio(this.callId, data);
     this.buffer.push(data);
     this.bufferBytes += data.length;
     this.receivedBytes += data.length;
@@ -88,12 +127,13 @@ class CallStream {
     this.cut();
     await this.queue;
     streams.delete(this.callId);
+    const recordingPath = await this.closeRecording().catch((e) => { console.error(e); return null; });
     const { rows } = await db.query(
-      `UPDATE calls SET status = 'completed',
+      `UPDATE calls SET status = 'completed', recording_path = COALESCE($2, recording_path),
          ended_at = COALESCE(ended_at, NOW()),
          duration_sec = COALESCE(duration_sec, EXTRACT(EPOCH FROM (NOW() - started_at))::int)
        WHERE id = $1 RETURNING *`,
-      [this.callId]
+      [this.callId, recordingPath]
     );
     if (rows[0]) live.broadcast({ type: 'call_ended', call: rows[0] });
   }
@@ -138,4 +178,9 @@ function activeCallIds() {
   return [...streams.keys()];
 }
 
-module.exports = { handleDevice, endCall, activeCallIds };
+function sendToPhone(callId, buf) {
+  const s = streams.get(callId);
+  if (s) s.sendToPhone(buf);
+}
+
+module.exports = { handleDevice, endCall, activeCallIds, sendToPhone };

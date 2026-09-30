@@ -23,7 +23,7 @@
     <header class="topbar">
       <div class="brand"><img src="/favicon.svg" alt=""> CallBridge</div>
       <nav id="nav">
-        <a href="#/live" data-route="live">Live</a>
+        <a href="#/live" data-route="live">Phone</a>
         <a href="#/calls" data-route="calls">Calls</a>
         <a href="#/tokens" data-route="tokens">Tokens</a>
         <a href="#/settings" data-route="settings">Settings</a>
@@ -34,6 +34,19 @@
       </div>
     </header>
     <main id="view"></main>
+  </div>
+
+  <div id="incoming" class="incoming hidden" role="dialog" aria-live="assertive">
+    <div class="incoming-card">
+      <div class="incoming-icon pulse">📞</div>
+      <div class="muted">Incoming call</div>
+      <div id="incoming-number" class="incoming-number"></div>
+      <div id="incoming-device" class="muted small"></div>
+      <div class="row" style="justify-content:center;margin-top:18px">
+        <button class="btn hang-btn" id="incoming-reject">Reject</button>
+        <button class="btn call-btn" id="incoming-answer">Answer</button>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="toast hidden"></div>

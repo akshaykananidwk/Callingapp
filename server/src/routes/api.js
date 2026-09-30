@@ -1,4 +1,5 @@
 /** REST API for the phone and the dashboard (PRD section 07). Mounted at /api. */
+const fs = require('fs');
 const express = require('express');
 const db = require('../db');
 const stream = require('../stream');
@@ -131,11 +132,23 @@ router.get('/calls/:id/export.txt', wrap(async (req, res) => {
   res.type('text/plain; charset=utf-8').send(lines.join('\n'));
 }));
 
+// GET /calls/:id/recording  (WAV, supports range requests for seeking)
+router.get('/calls/:id/recording', wrap(async (req, res) => {
+  if (!checkId(req, res)) return;
+  const { rows } = await db.query('SELECT recording_path FROM calls WHERE id = $1', [req.params.id]);
+  const file = rows[0]?.recording_path;
+  if (!file || !fs.existsSync(file)) return res.status(404).json({ error: 'No recording for this call' });
+  res.type('audio/wav');
+  if (req.query.download) res.setHeader('Content-Disposition', `attachment; filename="call-${req.params.id}.wav"`);
+  res.sendFile(file);
+}));
+
 // DELETE /calls/:id (dashboard only)
 router.delete('/calls/:id', wrap(async (req, res) => {
   if (!req.user) return res.status(403).json({ error: 'Dashboard login required' });
   if (!checkId(req, res)) return;
-  await db.query('DELETE FROM calls WHERE id = $1', [req.params.id]);
+  const { rows } = await db.query('DELETE FROM calls WHERE id = $1 RETURNING recording_path', [req.params.id]);
+  if (rows[0]?.recording_path) fs.rm(rows[0].recording_path, { force: true }, () => {});
   res.json({ ok: true });
 }));
 

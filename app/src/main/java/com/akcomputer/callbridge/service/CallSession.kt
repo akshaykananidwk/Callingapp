@@ -36,7 +36,9 @@ class CallSession(
     private var audio: AudioCapture? = null
     private var registerJob: Job? = null
 
-    private val socket = StreamSocket(scope) { text, ts ->
+    private val webAudio = WebAudioPlayer(context)
+
+    private val socket = StreamSocket(scope, onAudio = { webAudio.write(it) }, onTranscript = { text, ts ->
         val offset = when {
             ts < 0 -> System.currentTimeMillis() - startedAt
             ts > 100_000_000_000L -> ts - startedAt // absolute epoch ms
@@ -45,7 +47,7 @@ class CallSession(
         val seg = Segment(text, offset)
         synchronized(segments) { segments.add(seg) }
         LiveState.transcript.value = LiveState.transcript.value + seg
-    }
+    })
 
     fun start() {
         LiveState.transcript.value = emptyList()
@@ -90,6 +92,7 @@ class CallSession(
 
     suspend fun stop() {
         audio?.stop()
+        webAudio.stop()
         LiveState.audioLevel.value = 0f
         registerJob?.cancel()
         val endedAt = System.currentTimeMillis()

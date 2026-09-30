@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS calls (
   token_id UUID REFERENCES api_tokens(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS recording_path TEXT;
 CREATE INDEX IF NOT EXISTS idx_calls_started ON calls(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calls_number ON calls(phone_number);
 

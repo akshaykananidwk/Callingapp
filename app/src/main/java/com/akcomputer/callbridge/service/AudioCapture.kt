@@ -19,7 +19,7 @@ class AudioCapture(
 ) {
     companion object {
         const val SAMPLE_RATE = 16_000
-        const val CHUNK_BYTES = 6_400 // 200 ms * 16000 Hz * 2 bytes
+        const val CHUNK_BYTES = 1_280 // 40 ms * 16000 Hz * 2 bytes (low latency for live listening)
         private const val TAG = "AudioCapture"
 
         private val ALL = mapOf(
@@ -59,7 +59,7 @@ class AudioCapture(
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
-        val bufSize = max(minBuf, CHUNK_BYTES * 4)
+        val bufSize = max(minBuf, 6_400 * 4)
         for (name in order) {
             val src = ALL.getValue(name)
             var rec: AudioRecord? = null

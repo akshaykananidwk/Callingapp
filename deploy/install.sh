@@ -97,6 +97,8 @@ else
   APP_PORT=$(sed -n 's/^PORT=//p' "$ENV_FILE"); APP_PORT="${APP_PORT:-3100}"
 fi
 chown root:"$SVC_USER" "$ENV_FILE"; chmod 640 "$ENV_FILE"
+grep -q '^RECORDINGS_DIR=' "$ENV_FILE" || echo "RECORDINGS_DIR=/var/lib/callbridge/recordings" >> "$ENV_FILE"
+install -d -o "$SVC_USER" -g "$SVC_USER" -m 750 /var/lib/callbridge /var/lib/callbridge/recordings
 
 bold "6/9  Node dependencies"
 cd "$SERVER_DIR"

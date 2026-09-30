@@ -47,6 +47,12 @@ object Prefs {
         get() = sp.getBoolean("auto_open_live", true)
         set(v) = sp.edit().putBoolean("auto_open_live", v).apply()
 
+    // ---- Call answering ----
+    /** Answer incoming calls automatically (independent of the demo clip). */
+    var autoAnswer: Boolean
+        get() = sp.getBoolean("auto_answer", false)
+        set(v) = sp.edit().putBoolean("auto_answer", v).apply()
+
     // ---- Demo / test mode ----
     var demoEnabled: Boolean
         get() = sp.getBoolean("demo_enabled", false)
@@ -70,6 +76,9 @@ object Prefs {
         set(v) = sp.edit().putBoolean("demo_on_outgoing", v).apply()
 
     val apiBase: String get() = "$baseUrl/api"
+
+    val controlUrl: String
+        get() = streamUrl.removeSuffix("/stream") + "/device"
 
     val streamUrl: String
         get() = baseUrl

@@ -63,6 +63,8 @@ router.delete('/tokens/:id', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+router.get('/phones', (req, res) => res.json({ devices: require('../deviceHub').list() }));
+
 router.get('/overview', wrap(async (req, res) => {
   const stats = (await db.query(
     `SELECT
