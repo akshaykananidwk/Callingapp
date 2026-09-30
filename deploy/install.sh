@@ -23,7 +23,10 @@ command -v apt-get >/dev/null || die "This installer supports Ubuntu/Debian (apt
 
 # ---------------------------------------------------------------------------------------------
 bold "CallBridge installer — domain: $DOMAIN"
-if [ -z "${EMAIL:-}" ]; then read -rp "Email for the SSL certificate (Let's Encrypt): " EMAIL; fi
+until [[ "${EMAIL:-}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; do
+  [ -n "${EMAIL:-}" ] && warn "'$EMAIL' is not a valid email address (example: you@gmail.com)."
+  read -rp "Email for the SSL certificate (Let's Encrypt): " EMAIL
+done
 if [ -z "${ADMIN_USER:-}" ]; then read -rp "Dashboard admin username [admin]: " ADMIN_USER; ADMIN_USER="${ADMIN_USER:-admin}"; fi
 if [ -z "${ADMIN_PASS:-}" ]; then
   while true; do
