@@ -26,6 +26,7 @@ import com.akcomputer.callbridge.core.Prefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -71,6 +72,8 @@ class CallBridgeService : Service() {
     private var ringNumber: String? = null
     private var outgoingNumber: String? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var autoAnswerJob: Job? = null
+    private var demoJob: Job? = null
     private var inForeground = false
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -114,6 +117,7 @@ class CallBridgeService : Service() {
         session = null
         if (s != null) CoroutineScope(Dispatchers.Default).launch { s.stop() }
         releaseWakeLock()
+        DemoMode.stopPlayback(this)
         scope.cancel()
         super.onDestroy()
     }
@@ -153,6 +157,15 @@ class CallBridgeService : Service() {
                 if (session == null) {
                     ringing = true
                     if (!number.isNullOrBlank()) ringNumber = number
+                    if (Prefs.demoEnabled && Prefs.demoAutoAnswer && autoAnswerJob == null) {
+                        autoAnswerJob = scope.launch(Dispatchers.Main) {
+                            delay(Prefs.demoAnswerDelaySec * 1000L)
+                            // The number usually arrives in a second broadcast, so decide at answer time.
+                            if (ringing && session == null && DemoMode.appliesTo(ringNumber, incoming = true)) {
+                                DemoMode.answer(this@CallBridgeService)
+                            }
+                        }
+                    }
                 }
             }
             TelephonyManager.EXTRA_STATE_OFFHOOK -> {
@@ -168,6 +181,14 @@ class CallBridgeService : Service() {
                 session = s
                 s.start()
                 onCallStarted()
+                autoAnswerJob?.cancel()
+                autoAnswerJob = null
+                if (DemoMode.appliesTo(num, incoming = direction == "incoming")) {
+                    demoJob = scope.launch(Dispatchers.Main) {
+                        delay(1500) // let the call audio path settle
+                        DemoMode.startPlayback(this@CallBridgeService)
+                    }
+                }
             }
             TelephonyManager.EXTRA_STATE_IDLE -> {
                 val s = session
@@ -175,6 +196,11 @@ class CallBridgeService : Service() {
                 ringing = false
                 ringNumber = null
                 outgoingNumber = null
+                autoAnswerJob?.cancel()
+                autoAnswerJob = null
+                demoJob?.cancel()
+                demoJob = null
+                DemoMode.stopPlayback(this)
                 NotificationManagerCompat.from(this).cancel(Notifications.ID_LIVE)
                 if (s != null) scope.launch {
                     s.stop()

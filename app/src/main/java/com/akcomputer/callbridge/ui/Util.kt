@@ -25,6 +25,7 @@ val ALL_RUNTIME_PERMISSIONS: List<String> = buildList {
     add(Manifest.permission.READ_PHONE_STATE)
     add(Manifest.permission.READ_CALL_LOG)
     add(Manifest.permission.RECORD_AUDIO)
+    add(Manifest.permission.ANSWER_PHONE_CALLS)
     @Suppress("DEPRECATION")
     add(Manifest.permission.PROCESS_OUTGOING_CALLS)
     if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
@@ -34,6 +35,7 @@ val PERMISSION_LABELS = mapOf(
     Manifest.permission.READ_PHONE_STATE to "Phone state — detect ringing / active / idle",
     Manifest.permission.READ_CALL_LOG to "Call log — caller number",
     Manifest.permission.RECORD_AUDIO to "Microphone — capture call audio",
+    Manifest.permission.ANSWER_PHONE_CALLS to "Answer calls — demo auto-answer (optional)",
     "android.permission.PROCESS_OUTGOING_CALLS" to "Outgoing calls — dialled number",
     "android.permission.POST_NOTIFICATIONS" to "Notifications — status & live transcript",
 )

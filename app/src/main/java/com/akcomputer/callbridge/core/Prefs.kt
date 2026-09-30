@@ -47,6 +47,28 @@ object Prefs {
         get() = sp.getBoolean("auto_open_live", true)
         set(v) = sp.edit().putBoolean("auto_open_live", v).apply()
 
+    // ---- Demo / test mode ----
+    var demoEnabled: Boolean
+        get() = sp.getBoolean("demo_enabled", false)
+        set(v) = sp.edit().putBoolean("demo_enabled", v).apply()
+
+    var demoAutoAnswer: Boolean
+        get() = sp.getBoolean("demo_auto_answer", true)
+        set(v) = sp.edit().putBoolean("demo_auto_answer", v).apply()
+
+    var demoAnswerDelaySec: Int
+        get() = sp.getInt("demo_answer_delay", 2)
+        set(v) = sp.edit().putInt("demo_answer_delay", v).apply()
+
+    /** Comma separated numbers (last 10 digits compared). Blank = every incoming call. */
+    var demoNumbers: String
+        get() = sp.getString("demo_numbers", "")!!
+        set(v) = sp.edit().putString("demo_numbers", v).apply()
+
+    var demoOnOutgoing: Boolean
+        get() = sp.getBoolean("demo_on_outgoing", false)
+        set(v) = sp.edit().putBoolean("demo_on_outgoing", v).apply()
+
     val apiBase: String get() = "$baseUrl/api"
 
     val streamUrl: String

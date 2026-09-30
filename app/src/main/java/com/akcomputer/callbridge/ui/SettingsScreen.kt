@@ -115,6 +115,8 @@ fun SettingsScreen() {
         ToggleRow("Show live transcript in notification", liveNotif) { liveNotif = it; Prefs.liveNotification = it }
         ToggleRow("Open live screen when a call starts", autoOpen) { autoOpen = it; Prefs.autoOpenLive = it }
 
+        DemoSettings()
+
         SectionTitle("Keep running in background")
         Text(
             "Samsung (One UI): Settings → Apps → CallBridge → Battery → Unrestricted, and " +
