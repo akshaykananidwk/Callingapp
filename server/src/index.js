@@ -10,12 +10,17 @@ const stream = require('./stream');
 const deviceHub = require('./deviceHub');
 const control = require('./control');
 
+process.on('unhandledRejection', (e) => console.error('Unhandled rejection:', e));
+
 const app = express();
 app.set('trust proxy', 'loopback');
 app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
+const pbx = require('./pbx');
+app.use('/pbx', pbx.eventRouter);
+app.use('/admin/api/pbx', auth.requireUser, pbx.adminRouter);
 app.use('/api', require('./routes/api'));
 app.use('/admin/api', require('./routes/admin'));
 app.use(['/api', '/admin/api'], (req, res) => res.status(404).json({ error: 'Not found' }));

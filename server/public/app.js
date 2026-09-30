@@ -40,7 +40,12 @@
   const fmtDur = (sec) => sec == null ? '—' : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
   const fmtOffset = (ms) => fmtDur(Math.floor((ms || 0) / 1000));
   const dirBadge = (d) => d === 'outgoing' ? '<span class="badge out">Outgoing</span>' : '<span class="badge in">Incoming</span>';
-  const statusBadge = (s) => s === 'active' ? '<span class="badge live pulse">● Live</span>' : '<span class="badge">Completed</span>';
+  const statusBadge = (s) => ({
+    active: '<span class="badge live pulse">● Live</span>',
+    ringing: '<span class="badge live pulse">Ringing</span>',
+    missed: '<span class="badge out">Missed</span>',
+    failed: '<span class="badge">Failed</span>',
+  }[s] || '<span class="badge ok">Completed</span>');
   const highlight = (text, q) => {
     const safe = esc(text);
     if (!q) return safe;
@@ -53,11 +58,17 @@
     $('#app').classList.add('hidden');
     $('#login').classList.remove('hidden');
     disconnectLive();
+    softphone.stop();
   }
-  function showApp() {
+  async function showApp() {
     $('#login').classList.add('hidden');
     $('#app').classList.remove('hidden');
     connectLive();
+    try {
+      PBX.cfg = await api('/admin/api/pbx');
+      PBX.enabled = !!PBX.cfg.enabled;
+      if (PBX.enabled) softphone.start(PBX.cfg);
+    } catch {}
     route();
   }
   $('#login-form').addEventListener('submit', async (e) => {
@@ -165,6 +176,11 @@
         hideIncoming();
         if (audio.unlocked) setListen(ev.call.id);
         break;
+      case 'call_answered': {
+        const prev = S.active.get(ev.call.id);
+        S.active.set(ev.call.id, { call: ev.call, segs: prev ? prev.segs : [] });
+        break;
+      }
       case 'transcript': {
         const a = S.active.get(ev.call_id);
         if (a) a.segs.push({ text: ev.text, offset_ms: ev.ts });
@@ -282,10 +298,11 @@
 
   // ---------- incoming call popup (any page) ----------
   let titleBlink = null;
-  function showIncoming(number, device) {
+  /** Incoming call popup. `onAnswer`/`onReject` default to commanding the Android phone. */
+  function showIncoming(number, device, handlers = {}) {
     const el = $('#incoming');
     $('#incoming-number').textContent = number || 'Unknown number';
-    $('#incoming-device').textContent = device?.name || '';
+    $('#incoming-device').textContent = handlers.subtitle || device?.name || '';
     el.classList.remove('hidden');
     audio.startRing();
     const base = 'CallBridge';
@@ -299,11 +316,13 @@
       await audio.unlock();
       hideIncoming();
       location.hash = '#/live';
+      if (handlers.onAnswer) return handlers.onAnswer();
       const r = await command('answer', { token_id: device?.token_id });
       if (!r.ok) toast(r.error || 'Could not answer');
     };
     $('#incoming-reject').onclick = async () => {
       hideIncoming();
+      if (handlers.onReject) return handlers.onReject();
       const r = await command('hangup', { token_id: device?.token_id });
       if (!r.ok) toast(r.error || 'Could not reject');
     };
@@ -315,6 +334,318 @@
     document.title = 'CallBridge';
   }
 
+  // ---------- Web softphone (Asterisk + GoIP via WebRTC) ----------
+  const PBX = { cfg: null, enabled: false };
+  const softphone = {
+    ua: null, session: null, state: 'off', callState: null, muted: false, number: null,
+    remote: new Audio(),
+    start(cfg) {
+      if (this.ua || !window.JsSIP) return;
+      this.remote.autoplay = true;
+      const socket = new JsSIP.WebSocketInterface(cfg.web.ws_url);
+      this.ua = new JsSIP.UA({
+        sockets: [socket], uri: cfg.web.uri, password: cfg.web.password,
+        authorization_user: cfg.web.user, display_name: 'CallBridge Web',
+        register: true, register_expires: 120, session_timers: false, user_agent: 'CallBridge Web',
+      });
+      const set = (st) => { this.state = st; emit({ type: 'softphone' }); };
+      this.ua.on('connecting', () => set('connecting'));
+      this.ua.on('registered', () => set('registered'));
+      this.ua.on('unregistered', () => set('offline'));
+      this.ua.on('registrationFailed', (e) => { set('failed'); console.warn('SIP registration failed', e.cause); });
+      this.ua.on('disconnected', () => set('offline'));
+      this.ua.on('newRTCSession', (e) => this.onSession(e.session));
+      this.ua.start();
+    },
+    stop() { if (this.ua) { this.ua.stop(); this.ua = null; this.state = 'off'; } },
+    rtcOptions() {
+      return {
+        mediaConstraints: { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false },
+        pcConfig: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
+      };
+    },
+    onSession(s) {
+      if (this.session && this.session !== s) { if (s.direction === 'incoming') s.terminate({ status_code: 486 }); return; }
+      this.session = s;
+      this.muted = false;
+      this.number = s.remote_identity?.uri?.user || s.remote_identity?.display_name || null;
+      this.callState = s.direction === 'incoming' ? 'ringing' : 'calling';
+      const attach = (pc) => pc.addEventListener('track', (ev) => { this.remote.srcObject = ev.streams[0]; this.remote.play().catch(() => {}); });
+      if (s.connection) attach(s.connection);
+      s.on('peerconnection', (e) => attach(e.peerconnection));
+      let readyTimer = null;
+      s.on('icecandidate', (e) => {
+        if (e.candidate.type === 'srflx') return e.ready();
+        clearTimeout(readyTimer);
+        readyTimer = setTimeout(() => e.ready(), 1200);
+      });
+      s.on('progress', () => { if (s.direction === 'outgoing') { this.callState = 'ringing'; emit({ type: 'softphone' }); } });
+      s.on('accepted', () => { this.callState = 'connected'; this.connectedAt = Date.now(); hideIncoming(); emit({ type: 'softphone' }); });
+      const done = (e) => {
+        clearTimeout(readyTimer);
+        if (this.session === s) { this.session = null; this.callState = null; this.number = null; }
+        hideIncoming();
+        if (e?.cause && !['Terminated', 'Canceled', 'Rejected'].includes(e.cause)) toast(`Call ended: ${e.cause}`);
+        emit({ type: 'softphone' });
+      };
+      s.on('ended', done);
+      s.on('failed', done);
+      if (s.direction === 'incoming') {
+        showIncoming(this.number, null, {
+          subtitle: 'GSM line',
+          onAnswer: () => this.answer(),
+          onReject: () => this.hangup(),
+        });
+      }
+      emit({ type: 'softphone' });
+    },
+    async call(number) {
+      if (this.state !== 'registered') return toast('Web phone is not connected');
+      if (this.session) return toast('Already on a call');
+      await audio.unlock();
+      this.ua.call(`sip:${number}@${PBX.cfg.domain}`, this.rtcOptions());
+    },
+    answer() { if (this.session && this.callState === 'ringing') this.session.answer(this.rtcOptions()); },
+    hangup() { if (this.session) this.session.terminate(); },
+    toggleMute() {
+      if (!this.session) return;
+      this.muted ? this.session.unmute({ audio: true }) : this.session.mute({ audio: true });
+      this.muted = !this.muted;
+      emit({ type: 'softphone' });
+    },
+    dtmf(k) { if (this.session && this.callState === 'connected') this.session.sendDTMF(k); },
+  };
+
+  const MODE_LABELS = {
+    ring: 'Ring the website only',
+    ring_then_demo: 'Ring the website, then auto-answer with demo clip',
+    demo: 'Auto-answer immediately with demo clip',
+  };
+
+  async function pageSoftphone() {
+    view.innerHTML = `
+      <div class="grid phone-grid">
+        <div class="card">
+          <div class="row"><h2 style="margin:0">Phone</h2><span class="spacer"></span>
+            <button class="btn small" id="enable-audio">🔔 Enable sound & alerts</button></div>
+          <div id="sp-status" class="stack small" style="margin:12px 0;gap:6px"></div>
+          <form id="dial-form" class="stack" autocomplete="off">
+            <input id="dial-number" class="dial-input" inputmode="tel" placeholder="Enter number" aria-label="Number to call">
+            <div class="keypad">${['1','2','3','4','5','6','7','8','9','*','0','#'].map((k) => `<button type="button" class="key" data-key="${k}">${k}</button>`).join('')}</div>
+            <div class="row">
+              <button type="button" class="btn ghost" id="dial-back">⌫</button>
+              <button type="submit" class="btn call-btn" id="dial-call">📞 Call</button>
+            </div>
+          </form>
+          <label style="margin-top:14px">When a call comes in
+            <select id="sp-mode">${Object.entries(MODE_LABELS).map(([k, v]) => `<option value="${k}" ${PBX.cfg.settings.incoming_mode === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+          </label>
+        </div>
+        <div class="card" id="call-panel"></div>
+      </div>
+      <div class="grid cols-4" style="margin-top:16px" id="stats"></div>
+      <div class="card" style="margin-top:16px"><h2>Recent calls</h2><div id="recent"><p class="muted">Loading…</p></div></div>`;
+
+    const numberEl = $('#dial-number');
+    view.querySelectorAll('.key').forEach((k) => k.addEventListener('click', () => {
+      if (softphone.callState === 'connected') { softphone.dtmf(k.dataset.key); toast(`Sent ${k.dataset.key}`); return; }
+      numberEl.value += k.dataset.key; numberEl.focus();
+    }));
+    $('#dial-back').onclick = () => { numberEl.value = numberEl.value.slice(0, -1); };
+    $('#dial-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const number = numberEl.value.replace(/[^\d+*#]/g, '');
+      if (number.length < 3) return toast('Enter a valid number');
+      softphone.call(number);
+    });
+    $('#enable-audio').onclick = async () => {
+      await audio.unlock();
+      if ('Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
+      try { (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach((t) => t.stop()); } catch { toast('Allow the microphone to talk from the website'); }
+      toast('Sound, alerts and microphone enabled');
+    };
+    $('#sp-mode').onchange = async (e) => {
+      try {
+        const r = await api('/admin/api/pbx/settings', { method: 'PUT', body: { incoming_mode: e.target.value } });
+        PBX.cfg.settings = r.settings;
+        toast('Saved');
+      } catch (err) { toast(err.message); }
+    };
+
+    async function renderStatus() {
+      const el = $('#sp-status'); if (!el) return;
+      const st = softphone.state;
+      const webDot = st === 'registered' ? 'on' : (st === 'connecting' ? 'warn' : 'off');
+      let gw = PBX.cfg.status;
+      try { gw = (await api('/admin/api/pbx')).status; } catch {}
+      const g = gw?.goip;
+      el.innerHTML = `
+        <div class="row"><span class="dot ${webDot}"></span>Web phone: <b>${esc({ registered: 'Ready', connecting: 'Connecting…', failed: 'Login failed', offline: 'Offline', off: 'Off' }[st] || st)}</b></div>
+        <div class="row"><span class="dot ${g && /avail|reach/i.test(g.status) ? 'on' : g ? 'warn' : 'off'}"></span>GSM gateway (GoIP): <b>${g ? esc(g.status === 'Avail' ? 'Online' : g.status) : (gw?.asterisk === false ? 'PBX not running' : 'Not connected')}</b>
+          ${g ? `<span class="muted">${esc(g.contact.split('@')[1] || '')}</span>` : ''}</div>`;
+    }
+
+    function renderCall() {
+      const el = $('#call-panel'); if (!el) return;
+      const act = [...S.active.values()].sort((a, b) => new Date(b.call.started_at) - new Date(a.call.started_at))[0];
+      const cs = softphone.callState;
+      if (!cs && !act) {
+        el.innerHTML = `<h2>Current call</h2><div class="empty">No call in progress.<br><span class="small">Incoming calls ring here. Type a number on the left to call.</span></div>`;
+        return;
+      }
+      const number = softphone.number || act?.call.phone_number || 'Unknown number';
+      const label = { calling: 'Calling…', ringing: softphone.session?.direction === 'incoming' ? 'Incoming' : 'Ringing…', connected: 'Connected' }[cs]
+        || (act?.call.status === 'active' ? 'Auto-answered (demo)' : act?.call.status === 'ringing' ? 'Ringing' : '');
+      el.innerHTML = `
+        <div class="row"><h2 style="margin:0">${esc(number)}</h2>
+          ${act ? dirBadge(act.call.direction) : ''}<span class="badge live ${cs !== 'connected' ? 'pulse' : ''}">${esc(label)}</span>
+          <span class="spacer"></span><span class="timer" id="call-timer"></span></div>
+        <div class="call-actions">
+          ${cs === 'ringing' && softphone.session?.direction === 'incoming' ? '<button class="btn call-btn" id="c-answer">📞 Answer</button>' : ''}
+          ${cs ? `<button class="btn hang-btn" id="c-hangup">Hang up</button>
+                  <button class="btn ${softphone.muted ? 'primary' : ''}" id="c-mute">${softphone.muted ? '🔇 Muted' : '🎙 Mute'}</button>` : ''}
+          ${cs === 'connected' ? '<span class="muted small">Keypad sends tones (IVR)</span>' : ''}
+        </div>
+        <div class="transcript live-transcript" id="live-segs">
+          ${act ? (act.segs.length ? act.segs.map((x) => segHtml(x)).join('') : '<p class="muted">Live transcript appears here…</p>') : ''}
+        </div>`;
+      const t = $('#live-segs'); if (t) t.scrollTop = t.scrollHeight;
+      $('#c-answer') && ($('#c-answer').onclick = () => softphone.answer());
+      $('#c-hangup') && ($('#c-hangup').onclick = () => softphone.hangup());
+      $('#c-mute') && ($('#c-mute').onclick = () => softphone.toggleMute());
+    }
+
+    async function renderStats() {
+      try {
+        const o = await api('/admin/api/overview');
+        const s = o.stats;
+        const el = $('#stats'); if (!el) return;
+        el.innerHTML = `
+          <div class="card stat"><div class="label">Calls today</div><div class="value">${s.calls_today}</div></div>
+          <div class="card stat"><div class="label">Total calls</div><div class="value">${s.total_calls}</div></div>
+          <div class="card stat"><div class="label">Talk time</div><div class="value">${s.total_seconds < 60 ? s.total_seconds + ' s' : Math.round(s.total_seconds / 60) + ' min'}</div></div>
+          <div class="card stat"><div class="label">Speech-to-text</div>
+            <div class="value row" style="font-size:16px"><span class="dot ${o.stt.ok ? 'on' : 'off'}"></span>${esc(o.stt.provider)}</div></div>`;
+      } catch {}
+      const recent = await api('/api/calls?limit=8').catch(() => ({ calls: [] }));
+      const r = $('#recent'); if (r) r.innerHTML = callsTable(recent.calls);
+    }
+
+    renderStatus(); renderCall(); renderStats();
+    const statusTimer = setInterval(renderStatus, 10000);
+    const tick = setInterval(() => {
+      const tEl = $('#call-timer'); if (!tEl) return;
+      const act = [...S.active.values()].find((a) => a.call.status === 'active');
+      const since = softphone.callState === 'connected' ? softphone.connectedAt : (act ? new Date(act.call.started_at).getTime() : null);
+      tEl.textContent = since ? fmtDur(Math.floor((Date.now() - since) / 1000)) : '';
+    }, 500);
+    on((ev) => {
+      if (ev.type === 'softphone') { renderStatus(); renderCall(); }
+      if (['call_started', 'call_answered', 'transcript', 'refresh'].includes(ev.type)) renderCall();
+      if (ev.type === 'call_ended') { renderCall(); renderStats(); }
+    });
+    const prev = cleanup;
+    cleanup = () => { clearInterval(tick); clearInterval(statusTimer); prev && prev(); };
+  }
+
+  /** Decode any audio file/recording in the browser to 16 kHz mono PCM16. */
+  async function toPcm16k(blob, maxSeconds = 120) {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+    ctx.close();
+    const seconds = Math.min(decoded.duration, maxSeconds);
+    const off = new OfflineAudioContext(1, Math.ceil(seconds * 16000), 16000);
+    const src = off.createBufferSource();
+    src.buffer = decoded;
+    src.connect(off.destination);
+    src.start();
+    const f = (await off.startRendering()).getChannelData(0);
+    const out = new Int16Array(f.length);
+    for (let i = 0; i < f.length; i++) { const v = Math.max(-1, Math.min(1, f[i])); out[i] = v < 0 ? v * 32768 : v * 32767; }
+    return out.buffer;
+  }
+
+  function pbxSettingsHtml() {
+    const c = PBX.cfg;
+    const g = c.status?.goip;
+    return `
+      <div class="card">
+        <h2>GSM gateway (GoIP)</h2>
+        <p class="row"><span class="dot ${g && /avail/i.test(g.status) ? 'on' : 'off'}"></span>${g ? `Connected from <b>${esc(g.contact.split('@')[1] || g.contact)}</b> (${esc(g.status)})` : 'Not connected yet'}</p>
+        <p class="muted small">Enter these in the GoIP web panel → Configurations → Basic VoIP (Single server mode):</p>
+        <table class="kv">
+          <tr><td>SIP Server / Registrar</td><td><code class="inline">${esc(c.goip.server)}</code></td></tr>
+          <tr><td>Port</td><td><code class="inline">${c.goip.port}</code> (UDP)</td></tr>
+          <tr><td>Phone number / Auth ID</td><td><code class="inline">${esc(c.goip.user)}</code></td></tr>
+          <tr><td>Password</td><td><code class="inline" id="goip-pw">••••••••</code> <button class="btn small" id="goip-show">Show</button> <button class="btn small" id="goip-copy">Copy</button></td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h2>Incoming calls</h2>
+        <form id="pbx-settings" class="stack">
+          <label>When a call comes in<select name="incoming_mode">${Object.entries(MODE_LABELS).map(([k, v]) => `<option value="${k}" ${c.settings.incoming_mode === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+          <label>Ring the website for (seconds)<input name="ring_seconds" type="number" min="5" max="120" value="${esc(c.settings.ring_seconds)}"></label>
+          <label>Transcript language<select name="language">
+            ${[['', 'Server default'], ['auto', 'Auto detect'], ['gu', 'ગુજરાતી'], ['hi', 'हिन्दी'], ['en', 'English']].map(([k, v]) => `<option value="${k}" ${c.settings.language === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+          <button class="btn primary" type="submit">Save</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Demo clip</h2>
+        <p class="muted small">Played in a loop to the caller when a call is auto-answered. It goes straight into the phone line.</p>
+        <p id="demo-info">${c.demo ? `Current clip: ${c.demo.seconds} s` : 'No clip yet — Asterisk plays a sample greeting.'}</p>
+        <div class="row">
+          <button class="btn" id="demo-rec">● Record</button>
+          <label class="btn" style="flex-direction:row">Choose file<input type="file" id="demo-file" accept="audio/*" hidden></label>
+          ${c.demo ? '<button class="btn" id="demo-play">▶ Play</button><button class="btn danger" id="demo-del">Delete</button>' : ''}
+        </div>
+        <audio id="demo-audio" class="hidden" controls style="width:100%;margin-top:10px"></audio>
+      </div>`;
+  }
+
+  function bindPbxSettings(reload) {
+    const c = PBX.cfg;
+    $('#goip-show').onclick = () => { $('#goip-pw').textContent = c.goip.password; };
+    $('#goip-copy').onclick = () => copy(c.goip.password);
+    $('#pbx-settings').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      try {
+        const r = await api('/admin/api/pbx/settings', { method: 'PUT', body: { incoming_mode: f.get('incoming_mode'), ring_seconds: f.get('ring_seconds'), language: f.get('language') } });
+        c.settings = r.settings;
+        toast('Saved');
+      } catch (err) { toast(err.message); }
+    });
+    const upload = async (blob) => {
+      try {
+        $('#demo-info').textContent = 'Converting…';
+        const pcm = await toPcm16k(blob);
+        const res = await fetch('/admin/api/pbx/demo-audio', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: pcm, credentials: 'same-origin' });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || 'Upload failed');
+        toast(`Demo clip saved (${d.seconds} s)`);
+        reload();
+      } catch (err) { $('#demo-info').textContent = err.message; }
+    };
+    $('#demo-file').onchange = (e) => e.target.files[0] && upload(e.target.files[0]);
+    let rec = null;
+    $('#demo-rec').onclick = async () => {
+      if (rec) { rec.stop(); return; }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const chunks = [];
+        rec = new MediaRecorder(stream);
+        rec.ondataavailable = (e) => chunks.push(e.data);
+        rec.onstop = () => { stream.getTracks().forEach((t) => t.stop()); rec = null; $('#demo-rec').textContent = '● Record'; upload(new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' })); };
+        rec.start();
+        $('#demo-rec').textContent = '■ Stop recording';
+        $('#demo-info').textContent = 'Recording… speak now';
+      } catch (err) { toast('Microphone blocked: ' + err.message); }
+    };
+    if ($('#demo-play')) $('#demo-play').onclick = () => { const a = $('#demo-audio'); a.classList.remove('hidden'); a.src = '/admin/api/pbx/demo-audio?t=' + Date.now(); a.play(); };
+    if ($('#demo-del')) $('#demo-del').onclick = async () => { await api('/admin/api/pbx/demo-audio', { method: 'DELETE' }); toast('Deleted'); reload(); };
+  }
+
   // ---------- router ----------
   let cleanup = null;
   function route() {
@@ -322,7 +653,7 @@
     const hash = location.hash.replace(/^#\/?/, '') || 'live';
     const [name, id] = hash.split('/');
     document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === name));
-    const pages = { live: pageLive, calls: id ? () => pageCall(id) : pageCalls, tokens: pageTokens, settings: pageSettings };
+    const pages = { live: PBX.enabled ? pageSoftphone : pageLive, calls: id ? () => pageCall(id) : pageCalls, tokens: pageTokens, settings: pageSettings };
     (pages[name] || pageLive)();
   }
   window.addEventListener('hashchange', route);
@@ -679,10 +1010,20 @@
   async function pageSettings() {
     const me = await api('/admin/api/me');
     const overview = await api('/admin/api/overview');
+    if (PBX.enabled) PBX.cfg = await api('/admin/api/pbx').catch(() => PBX.cfg);
     view.innerHTML = `
       <h1>Settings</h1>
       <div class="grid cols-2">
-        <div class="card">
+        ${PBX.enabled ? `<div class="card">
+          <h2>Setup</h2>
+          <ol class="steps">
+            <li>Configure the GoIP with the details in <b>GSM gateway</b> below — the dot turns green when it connects.</li>
+            <li>On the <a href="#/live">Phone</a> page click <b>Enable sound & alerts</b> and allow the microphone.</li>
+            <li>Choose what happens to incoming calls (below), and record a demo clip if you use auto-answer.</li>
+            <li>Call the SIM number from another phone — it rings on the website.</li>
+          </ol>
+        </div>` : ''}
+        <div class="card ${PBX.enabled ? 'hidden' : ''}">
           <h2>Phone setup</h2>
           <ol class="steps">
             <li><a href="/download/CallBridge.apk">Download the CallBridge APK</a> on the phone and install it.</li>
@@ -708,7 +1049,9 @@
             <button class="btn primary" type="submit">Update password</button>
           </form>
         </div>
+        ${PBX.enabled ? pbxSettingsHtml() : ''}
       </div>`;
+    if (PBX.enabled) bindPbxSettings(pageSettings);
     $('#pw').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);

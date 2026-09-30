@@ -6,11 +6,15 @@ live transcript on the phone. Built from the CallBridge PRD v1.0.
 **Server + dashboard setup (Gujarati step-by-step): [deploy/DEPLOY-GU.md](deploy/DEPLOY-GU.md)** —
 one command: `sudo bash deploy/install.sh`.
 
+**Website calling through a GoIP GSM gateway (Asterisk + WebRTC): [deploy/GOIP-GU.md](deploy/GOIP-GU.md)** —
+`sudo bash deploy/pbx-install.sh`. The website becomes the phone: incoming calls ring in the browser, dial any
+number, auto-answer with a demo clip injected straight into the line, two-sided recording and live transcript.
+
 | Folder | What |
 |---|---|
 | `app/` | Android app (Kotlin, Compose) |
 | `server/` | Node.js backend: REST API, audio WebSocket, Whisper STT, web dashboard, token management |
-| `deploy/` | Installer (Nginx, PostgreSQL, whisper.cpp, SSL, systemd), update script, guide |
+| `deploy/` | Installers (app: Nginx, PostgreSQL, whisper.cpp, SSL, systemd; PBX: Asterisk, fail2ban), Asterisk templates, guides |
 | `release/` | Prebuilt APK |
 
 ## Install the app

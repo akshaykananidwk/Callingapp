@@ -146,3 +146,6 @@ code.inline { background: var(--surface-2); padding: 2px 6px; border-radius: 6px
 .incoming-number { font-size: 26px; font-weight: 700; margin-top: 4px; }
 .incoming .btn { flex: 1; padding: 12px; }
 @media (max-width: 800px) { .phone-grid { grid-template-columns: 1fr; } }
+
+table.kv td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+table.kv td:first-child { color: var(--muted); white-space: nowrap; }

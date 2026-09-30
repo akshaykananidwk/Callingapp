@@ -178,9 +178,24 @@ function activeCallIds() {
   return [...streams.keys()];
 }
 
+/** Source-agnostic API (used by the PBX integration). */
+function open(callId, language) {
+  let s = streams.get(callId);
+  if (!s) { s = new CallStream(callId, language || 'auto'); streams.set(callId, s); }
+  return s;
+}
+function push(callId, buf) {
+  const s = streams.get(callId);
+  if (s) s.push(buf);
+}
+async function finish(callId) {
+  const s = streams.get(callId);
+  if (s) await s.finish();
+}
+
 function sendToPhone(callId, buf) {
   const s = streams.get(callId);
   if (s) s.sendToPhone(buf);
 }
 
-module.exports = { handleDevice, endCall, activeCallIds, sendToPhone };
+module.exports = { handleDevice, endCall, activeCallIds, sendToPhone, open, push, finish };

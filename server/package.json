@@ -5,7 +5,9 @@
   "description": "CallBridge VPS backend: REST API, audio WebSocket, Whisper STT, web dashboard",
   "main": "src/index.js",
   "type": "commonjs",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/index.js",
     "create-admin": "node scripts/create-admin.js"

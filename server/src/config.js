@@ -13,5 +13,17 @@ module.exports = {
   defaultLanguage: env.DEFAULT_LANGUAGE || 'auto',
   chunkSeconds: Math.min(Math.max(parseFloat(env.CHUNK_SECONDS || '5'), 2), 20),
   recordingsDir: env.RECORDINGS_DIR || '/var/lib/callbridge/recordings',
+  pbx: {
+    enabled: env.PBX_ENABLED === '1',
+    domain: env.PBX_DOMAIN || '',
+    wsUrl: env.PBX_WS_URL || '',
+    secret: env.PBX_SECRET || '',
+    webUser: env.SIP_WEB_USER || 'webrtc',
+    webPassword: env.SIP_WEB_PASSWORD || '',
+    goipUser: env.GOIP_USER || 'goip',
+    goipPassword: env.GOIP_PASSWORD || '',
+    liveDir: env.PBX_LIVE_DIR || '/var/lib/callbridge/live',
+    soundsDir: env.PBX_SOUNDS_DIR || '/var/lib/callbridge/sounds',
+  },
   secureCookies: (env.PUBLIC_URL || '').startsWith('https://'),
 };
