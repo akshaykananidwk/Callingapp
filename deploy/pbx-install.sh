@@ -123,12 +123,12 @@ cat <<DONE
 ============================================================
   CallBridge PBX is ready (website: $STATUS)
 
-  GoIP settings (web panel → Configurations → Basic VoIP):
-    Config mode          : Single Server
-    SIP Server/Registrar : $DOMAIN      Port: 5060
-    Phone Number         : goip
-    Authentication ID    : goip
-    Password             : $GOIP_PASSWORD
+  Line gateway settings (HT813 FXO port, or GoIP Basic VoIP):
+    SIP Server / Registrar : $DOMAIN      Port: 5060
+    SIP User ID / Phone No : goip
+    Authenticate ID        : goip
+    Password               : $GOIP_PASSWORD
+  Guides: deploy/LANDLINE-GU.md (HT813) · deploy/GOIP-GU.md (SIM)
 
   Website: https://$DOMAIN → Phone  (log in again if it was open)
 ============================================================

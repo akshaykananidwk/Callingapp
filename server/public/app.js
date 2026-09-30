@@ -392,7 +392,7 @@
       s.on('failed', done);
       if (s.direction === 'incoming') {
         showIncoming(this.number, null, {
-          subtitle: 'GSM line',
+          subtitle: 'Phone line',
           onAnswer: () => this.answer(),
           onReject: () => this.hangup(),
         });
@@ -481,7 +481,7 @@
       const g = gw?.goip;
       el.innerHTML = `
         <div class="row"><span class="dot ${webDot}"></span>Web phone: <b>${esc({ registered: 'Ready', connecting: 'Connecting…', failed: 'Login failed', offline: 'Offline', off: 'Off' }[st] || st)}</b></div>
-        <div class="row"><span class="dot ${g && /avail|reach/i.test(g.status) ? 'on' : g ? 'warn' : 'off'}"></span>GSM gateway (GoIP): <b>${g ? esc(g.status === 'Avail' ? 'Online' : g.status) : (gw?.asterisk === false ? 'PBX not running' : 'Not connected')}</b>
+        <div class="row"><span class="dot ${g && /avail|reach/i.test(g.status) ? 'on' : g ? 'warn' : 'off'}"></span>Phone line gateway: <b>${g ? esc(g.status === 'Avail' ? 'Online' : g.status) : (gw?.asterisk === false ? 'PBX not running' : 'Not connected')}</b>
           ${g ? `<span class="muted">${esc(g.contact.split('@')[1] || '')}</span>` : ''}</div>`;
     }
 
@@ -570,9 +570,9 @@
     const g = c.status?.goip;
     return `
       <div class="card">
-        <h2>GSM gateway (GoIP)</h2>
+        <h2>Phone line gateway (HT813 / GoIP)</h2>
         <p class="row"><span class="dot ${g && /avail/i.test(g.status) ? 'on' : 'off'}"></span>${g ? `Connected from <b>${esc(g.contact.split('@')[1] || g.contact)}</b> (${esc(g.status)})` : 'Not connected yet'}</p>
-        <p class="muted small">Enter these in the GoIP web panel → Configurations → Basic VoIP (Single server mode):</p>
+        <p class="muted small">Enter these in the gateway's web panel (HT813: FXO Port page · GoIP: Basic VoIP):</p>
         <table class="kv">
           <tr><td>SIP Server / Registrar</td><td><code class="inline">${esc(c.goip.server)}</code></td></tr>
           <tr><td>Port</td><td><code class="inline">${c.goip.port}</code> (UDP)</td></tr>
@@ -1017,10 +1017,10 @@
         ${PBX.enabled ? `<div class="card">
           <h2>Setup</h2>
           <ol class="steps">
-            <li>Configure the GoIP with the details in <b>GSM gateway</b> below — the dot turns green when it connects.</li>
+            <li>Configure the line gateway (HT813 for a landline, or GoIP for a SIM) with the details in <b>Phone line gateway</b> below — the dot turns green when it connects.</li>
             <li>On the <a href="#/live">Phone</a> page click <b>Enable sound & alerts</b> and allow the microphone.</li>
             <li>Choose what happens to incoming calls (below), and record a demo clip if you use auto-answer.</li>
-            <li>Call the SIM number from another phone — it rings on the website.</li>
+            <li>Call your landline / SIM number from another phone — it rings on the website.</li>
           </ol>
         </div>` : ''}
         <div class="card ${PBX.enabled ? 'hidden' : ''}">

@@ -6,7 +6,7 @@ live transcript on the phone. Built from the CallBridge PRD v1.0.
 **Server + dashboard setup (Gujarati step-by-step): [deploy/DEPLOY-GU.md](deploy/DEPLOY-GU.md)** —
 one command: `sudo bash deploy/install.sh`.
 
-**Website calling through a GoIP GSM gateway (Asterisk + WebRTC): [deploy/GOIP-GU.md](deploy/GOIP-GU.md)** —
+**Website calling through a landline (Grandstream HT813 FXO: [deploy/LANDLINE-GU.md](deploy/LANDLINE-GU.md)) or a GoIP GSM gateway ([deploy/GOIP-GU.md](deploy/GOIP-GU.md)), via Asterisk + WebRTC** —
 `sudo bash deploy/pbx-install.sh`. The website becomes the phone: incoming calls ring in the browser, dial any
 number, auto-answer with a demo clip injected straight into the line, two-sided recording and live transcript.
 
