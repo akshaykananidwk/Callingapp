@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CallBridge</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <form id="login-form" class="card login-card">
+      <div class="brand"><img src="/favicon.svg" alt=""> CallBridge</div>
+      <p class="muted">Sign in to the dashboard</p>
+      <label>Username<input name="username" autocomplete="username" required></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">Sign in</button>
+      <p id="login-error" class="error"></p>
+    </form>
+  </div>
+
+  <div id="app" class="hidden">
+    <header class="topbar">
+      <div class="brand"><img src="/favicon.svg" alt=""> CallBridge</div>
+      <nav id="nav">
+        <a href="#/live" data-route="live">Live</a>
+        <a href="#/calls" data-route="calls">Calls</a>
+        <a href="#/tokens" data-route="tokens">Tokens</a>
+        <a href="#/settings" data-route="settings">Settings</a>
+      </nav>
+      <div class="topbar-right">
+        <span id="ws-dot" class="dot" title="Live connection"></span>
+        <button id="logout" class="btn ghost small">Sign out</button>
+      </div>
+    </header>
+    <main id="view"></main>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

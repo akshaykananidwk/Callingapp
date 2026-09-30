@@ -1,11 +1,21 @@
-# CallBridge — Android app
+# CallBridge
 
 Streams live GSM call audio (16 kHz mono PCM, 200 ms frames) to your VPS over WebSocket and shows the
 live transcript on the phone. Built from the CallBridge PRD v1.0.
 
-## Install
+**Server + dashboard setup (Gujarati step-by-step): [deploy/DEPLOY-GU.md](deploy/DEPLOY-GU.md)** —
+one command: `sudo bash deploy/install.sh`.
 
-1. Download `release/CallBridge-v1.0.0.apk` (or the `CallBridge-apk` artifact from the GitHub Actions run).
+| Folder | What |
+|---|---|
+| `app/` | Android app (Kotlin, Compose) |
+| `server/` | Node.js backend: REST API, audio WebSocket, Whisper STT, web dashboard, token management |
+| `deploy/` | Installer (Nginx, PostgreSQL, whisper.cpp, SSL, systemd), update script, guide |
+| `release/` | Prebuilt APK |
+
+## Install the app
+
+1. Download `release/CallBridge-v1.0.1.apk` (or from the dashboard → Settings) (or the `CallBridge-apk` artifact from the GitHub Actions run).
 2. On the phone: Settings → allow *Install unknown apps* for your browser/files app → open the APK.
 3. First launch: **Grant all permissions** → **Disable battery optimization** → enter VPS URL + API token → **Start CallBridge**.
 4. Samsung (One UI): Apps → CallBridge → Battery → *Unrestricted*; Permissions → Microphone → *Allow*.
@@ -21,7 +31,7 @@ Requires JDK 17+ and an Android SDK with platform 35 (`local.properties` → `sd
 
 ## Server contract the app uses
 
-Base URL setting, default `https://akdwk.in/callbridge`. All requests send `Authorization: Bearer <token>`.
+Base URL setting, default `https://test.akdwk.in`. All requests send `Authorization: Bearer <token>`.
 
 | Call | Details |
 |---|---|
@@ -44,3 +54,5 @@ Base URL setting, default `https://akdwk.in/callbridge`. All requests send `Auth
 - **After reboot on Android 14+:** Android does not let a microphone foreground service start from boot. CallBridge
   posts a "Tap to resume" notification; one tap restores it. On Android 13 and below it starts on its own.
 - Hilt/Room from the PRD tech stack were left out to keep v1 small; history is cached in a local JSON file.
+- The dashboard is plain HTML/JS served by the Node server (not Next.js), and services run under systemd
+  instead of PM2 — fewer moving parts to install. Transcripts arrive in ~5 s chunks (`CHUNK_SECONDS`).

@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 
 object Prefs {
-    const val DEFAULT_BASE_URL = "https://akdwk.in/callbridge"
+    const val DEFAULT_BASE_URL = "https://test.akdwk.in"
 
     private lateinit var sp: SharedPreferences
 
@@ -12,7 +12,7 @@ object Prefs {
         sp = context.getSharedPreferences("callbridge", Context.MODE_PRIVATE)
     }
 
-    /** Base URL, e.g. https://akdwk.in/callbridge (API at /api, stream at /stream). */
+    /** Base URL, e.g. https://test.akdwk.in (API at /api, stream at /stream). */
     var baseUrl: String
         get() = sp.getString("base_url", DEFAULT_BASE_URL)!!
         set(v) = sp.edit().putString("base_url", v.trim().trimEnd('/')).apply()

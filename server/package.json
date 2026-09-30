@@ -1,0 +1,19 @@
+{
+  "name": "callbridge-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CallBridge VPS backend: REST API, audio WebSocket, Whisper STT, web dashboard",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/index.js",
+    "create-admin": "node scripts/create-admin.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "ws": "^8.18.0"
+  }
+}
